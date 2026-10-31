@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Quiz — WebSocket тест</title>
+  <style>
+    :root { --bg:#0f1117; --card:#1a1d27; --line:#2a2f3d; --text:#e8eaf0; --muted:#8b91a3; --accent:#7c5cff; --ok:#2ecc71; --warn:#f39c12; --err:#e74c3c; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px; display:grid; gap:16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    h1 { grid-column: 1/-1; margin: 8px 0 0; font-size: 22px; }
+    section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+    h2 { margin:0 0 12px; font-size:15px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+    input, select, button { font:inherit; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#11141c; color:var(--text); }
+    button { background:var(--accent); border:none; cursor:pointer; }
+    button:disabled { opacity:.4; cursor:not-allowed; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+    .row > input { flex:1; min-width:100px; }
+    .status { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; background:var(--line); }
+    .status.open { background:var(--ok); color:#000; } .status.closed { background:var(--err); }
+    ul { list-style:none; padding:0; margin:0; } li { padding:6px 0; border-bottom:1px solid var(--line); }
+    .off { color:var(--muted); text-decoration:line-through; }
+    #log { height:260px; overflow:auto; font: 12px/1.5 ui-monospace, monospace; background:#0b0d12; padding:8px; border-radius:8px; white-space:pre-wrap; }
+    .in { color:var(--ok); } .out { color:#6cb6ff; } .sys { color:var(--warn); }
+    .stat { font-size:28px; font-weight:700; } .muted { color:var(--muted); font-size:13px; }
+    .stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
+    .emoji button { font-size:20px; background:#11141c; border:1px solid var(--line); }
+    #reactions { font-size:28px; min-height:40px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🎮 Live Quiz Battle — Week 8 WebSocket тест</h1>
+
+  <section>
+    <h2>1. Өрөө</h2>
+    <div class="row"><button id="createBtn">Шинэ өрөө үүсгэх</button></div>
+    <div class="row">
+      <input id="code" placeholder="6 оронтой код" maxlength="6" inputmode="numeric" />
+      <input id="name" placeholder="Нэр" maxlength="20" />
+      <select id="role"><option value="player">Тоглогч</option><option value="host">Host</option></select>
+    </div>
+    <div class="row">
+      <button id="joinBtn">WebSocket-оор нэгдэх</button>
+      <button id="leaveBtn" disabled>Гарах</button>
+      <button id="pingBtn" disabled>Ping</button>
+    </div>
+    <p>Төлөв: <span id="wsStatus" class="status">холбогдоогүй</span> <span id="me" class="muted"></span></p>
+    <div class="row emoji">
+      <button data-emoji="🔥" disabled>🔥</button><button data-emoji="😂" disabled>😂</button>
+      <button data-emoji="👏" disabled>👏</button><button data-emoji="😱" disabled>😱</button>
+    </div>
+    <div id="reactions"></div>
+  </section>
+
+  <section>
+    <h2>2. Тоглогчид</h2>
+    <ul id="players"><li class="muted">Нэгдсэний дараа энд харагдана</li></ul>
+  </section>
+
+  <section>
+    <h2>3. HTTP Polling vs WebSocket</h2>
+    <p class="muted">Polling: 1 секунд тутам <code>GET /rooms/:code</code> илгээнэ. Хэдэн хүсэлт "дэмий" (өөрчлөлтгүй) байгааг харьцуул.</p>
+    <div class="row"><button id="pollBtn">Polling эхлүүлэх</button></div>
+    <div class="stats">
+      <div><div class="stat" id="pollCount">0</div><div class="muted">Polling хүсэлт</div></div>
+      <div><div class="stat" id="pollUseful">0</div><div class="muted">Үүнээс өөрчлөлттэй</div></div>
+      <div><div class="stat" id="wsCount">0</div><div class="muted">WebSocket-оор ирсэн мессеж</div></div>
+      <div><div class="stat" id="pollBytes">0</div><div class="muted">Polling-оор татсан KB</div></div>
+    </div>
+  </section>
+
+  <section style="grid-column:1/-1">
+    <h2>4. Лог (DevTools → Network → WS табаас ч харж болно)</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let ws = null;
+  let myId = null;
+  const players = new Map();
+
+  function log(kind, text) {
+    const line = document.createElement('div');
+    line.className = kind;
+    const arrow = kind === 'in' ? '⬇ ' : kind === 'out' ? '⬆ ' : '• ';
+    line.textContent = new Date().toLocaleTimeString() + '  ' + arrow + text;
+    $('log').appendChild(line);
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+
+  function setConnected(on) {
+    $('wsStatus').textContent = on ? 'нээлттэй' : 'хаагдсан';
+    $('wsStatus').className = 'status ' + (on ? 'open' : 'closed');
+    $('joinBtn').disabled = on;
+    $('leaveBtn').disabled = !on;
+    $('pingBtn').disabled = !on;
+    document.querySelectorAll('[data-emoji]').forEach((b) => (b.disabled = !on));
+  }
+
+  function renderPlayers() {
+    const ul = $('players');
+    ul.innerHTML = '';
+    for (const p of players.values()) {
+      const li = document.createElement('li');
+      li.textContent = (p.role === 'host' ? '👑 ' : '🙂 ') + p.name + (p.id === myId ? ' (би)' : '');
+      if (!p.connected) li.className = 'off';
+      ul.appendChild(li);
+    }
+  }
+
+  function send(msg) {
+    const text = JSON.stringify(msg);
+    ws.send(text);
+    log('out', text);
+  }
+
+  // ---------- HTTP: өрөө үүсгэх ----------
+  $('createBtn').onclick = async () => {
+    const res = await fetch('/rooms', { method: 'POST' });
+    const data = await res.json();
+    log('sys', 'POST /rooms → ' + res.status + ' ' + JSON.stringify(data));
+    if (data.code) $('code').value = data.code;
+  };
+
+  // ---------- WebSocket: нэгдэх ----------
+  $('joinBtn').onclick = () => {
+    const code = $('code').value.trim();
+    const name = $('name').value.trim();
+    if (!/^\d{6}$/.test(code) || !name) return alert('Код (6 оронтой) болон нэрээ оруулна уу');
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + '/rooms/' + code + '/ws';
+    log('sys', 'new WebSocket(' + url + ')  — readyState=CONNECTING(0)');
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      log('sys', 'onopen — 101 Switching Protocols, readyState=OPEN(1)');
+      setConnected(true);
+      send({ type: 'join', name, role: $('role').value });
+    };
+
+    ws.onmessage = (event) => {
+      $('wsCount').textContent = +$('wsCount').textContent + 1;
+      log('in', event.data);
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case 'welcome':
+          myId = msg.playerId;
+          $('me').textContent = 'playerId: ' + myId;
+          players.clear();
+          Object.values(msg.room.players).forEach((p) => players.set(p.id, p));
+          renderPlayers();
+          break;
+        case 'player_joined':
+          players.set(msg.player.id, msg.player);
+          renderPlayers();
+          break;
+        case 'player_left': {
+          const p = players.get(msg.playerId);
+          if (p) p.connected = false;
+          renderPlayers();
+          break;
+        }
+        case 'reaction': {
+          const span = document.createElement('span');
+          span.title = msg.name;
+          span.textContent = msg.emoji;
+          $('reactions').appendChild(span);
+          setTimeout(() => span.remove(), 3000);
+          break;
+        }
+      }
+    };
+
+    ws.onclose = (event) => {
+      log('sys', 'onclose code=' + event.code + ' — readyState=CLOSED(3)');
+      setConnected(false);
+      ws = null;
+    };
+    ws.onerror = () => log('sys', 'onerror — холболтод алдаа гарлаа');
+  };
+
+  $('leaveBtn').onclick = () => ws && ws.close(1000, 'bye');
+  $('pingBtn').onclick = () => send({ type: 'ping' });
+  document.querySelectorAll('[data-emoji]').forEach((b) => (b.onclick = () => send({ type: 'reaction', emoji: b.dataset.emoji })));
+
+  // ---------- HTTP Polling харьцуулалт ----------
+  let pollTimer = null;
+  let lastBody = '';
+  let bytes = 0;
+  $('pollBtn').onclick = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      $('pollBtn').textContent = 'Polling эхлүүлэх';
+      return;
+    }
+    const code = $('code').value.trim();
+    if (!/^\d{6}$/.test(code)) return alert('Эхлээд өрөөний код оруулна уу');
+    $('pollBtn').textContent = 'Polling зогсоох';
+    pollTimer = setInterval(async () => {
+      const res = await fetch('/rooms/' + code);
+      const body = await res.text();
+      bytes += body.length;
+      $('pollCount').textContent = +$('pollCount').textContent + 1;
+      $('pollBytes').textContent = (bytes / 1024).toFixed(1);
+      if (body !== lastBody) {
+        $('pollUseful').textContent = +$('pollUseful').textContent + 1;
+        lastBody = body;
+      }
+    }, 1000);
+  };
+</script>
+</body>
+</html>

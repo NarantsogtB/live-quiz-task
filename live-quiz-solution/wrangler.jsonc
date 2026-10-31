@@ -1,0 +1,30 @@
+{
+  "name": "live-quiz-solution",
+  "main": "src/index.ts",
+
+  "compatibility_date": "2026-06-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "dev": {
+    "port": 8787,
+  },
+
+  // public/ доторх файлыг (тест client) шууд static байдлаар serve хийнэ.
+  // Файлтай таарахгүй замууд (/rooms/...) Worker-ийн fetch() руу очно.
+  "assets": {
+    "directory": "./public",
+  },
+
+  // Worker кодоос `env.QUIZ_ROOM` гэж Durable Object-ийн namespace-д хандана.
+  "durable_objects": {
+    "bindings": [{ "name": "QUIZ_ROOM", "class_name": "QuizRoom" }],
+  },
+
+  // Durable Object класс шинээр нэмэх/устгах бүрт migration бичнэ.
+  // new_sqlite_classes = SQLite-д суурилсан storage-тай DO (Cloudflare-ийн санал болгодог).
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuizRoom"] }],
+
+  "observability": {
+    "enabled": true,
+  },
+}
